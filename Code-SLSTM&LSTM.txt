@@ -1,0 +1,160 @@
+class Mydataset(Dataset):   
+    def __init__(self, data, label, mode='2D'):
+        self.data, self.label, self.mode = data, label, mode
+    def __getitem__(self, index):
+        if self.mode == '2D':
+            return self.data[index, :], self.label[index, :]
+        elif self.mode == '3D':
+            return self.data[:, index, :], self.label[:, index, :]
+    def __len__(self):
+        if self.mode == '2D':
+            return self.data.shape[0]
+        elif self.mode == '3D':
+            return self.data.shape[1]
+class SLSTM(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(SLSTM, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.W = nn.Parameter(torch.Tensor(input_dim, hidden_dim * 4), requires_grad=True)
+        self.U = nn.Parameter(torch.Tensor(hidden_dim, hidden_dim * 4), requires_grad=True)
+        self.bias = nn.Parameter(torch.Tensor(hidden_dim * 4), requires_grad=True)
+        self.Wy = nn.Parameter(torch.Tensor(output_dim, hidden_dim * 4), requires_grad=True)
+        self.fc = nn.Linear(hidden_dim, output_dim, bias=True)
+        self.init_weights()
+    def init_weights(self):
+        stdv = 1.0 / math.sqrt(self.hidden_dim)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdv, stdv)
+    def forward(self, X, init_states=None):
+        batch_size, seq_len, _ = X.size()
+        print(X.size())
+        x = X[:, :, 0: self.input_dim]
+        print(x.size())
+        y = X[:, :, self.input_dim-1:]
+        print(y.size())
+        y = y.view(batch_size, seq_len, self.output_dim)
+        hidden_seq = []
+        if init_states is None:
+            h_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
+            c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
+        else:
+            h_t, c_t = init_states
+        HS = self.hidden_dim
+        for t in range(seq_len):
+            x_t = x[:, t, :]
+            y_t = y[:, t, :]
+            y_t = y_t.view(batch_size, -1)
+            gates = x_t @ self.W + h_t @ self.U + y_t @ self.Wy + self.bias
+            i_t = torch.sigmoid(gates[:, :HS])
+            f_t = torch.sigmoid(gates[:, HS:HS*2])
+            g_t = torch.tanh(gates[:, HS*2:HS*3])
+            o_t = torch.sigmoid(gates[:, HS*3:])
+            c_t = f_t * c_t + i_t * g_t
+            h_t = o_t * torch.tanh(c_t)
+            hidden_seq.append(h_t.unsqueeze(0))
+        hidden_seq = torch.cat(hidden_seq, dim=0)
+        hidden_seq = hidden_seq.transpose(0, 1).contiguous()
+        final_feature = hidden_seq[:, seq_len-1, :].squeeze()
+        final_feature = final_feature.view(batch_size, HS)
+        y_pred = self.fc(final_feature)
+        return y_pred, hidden_seq, (h_t, c_t)
+class SLSTMModel(BaseEstimator, RegressorMixin):
+    def __init__(self, dim_X, dim_y, dim_H, seq_len=, n_epoch=, batch_size=, lr=,dropout=,optimizer=,momentum=,device=torch.device(), seed=):
+        super(SLSTMModel, self).__init__()
+        torch.manual_seed(seed)
+        self.dim_X = dim_X
+        self.dim_y = dim_y
+        self.dim_H = dim_H
+        self.seq_len = seq_len
+        self.n_epoch = n_epoch
+        self.batch_size = batch_size
+        self.lr = lr
+        self.device = device
+        self.seed = seed
+        self.dropout = dropout
+        self.optimizer = optimizer
+        self.momentum = momentum
+        self.attention = attention
+        self.scaler_X = StandardScaler()
+        self.loss_hist = []
+        self.model = SLSTM(input_dim=dim_X, hidden_dim=dim_H, output_dim=dim_y).to(device)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.criterion = nn.MSELoss(reduction='mean')
+    def fit(self, X, y):
+        X = self.scaler_X.fit_transform(X)
+        y = y.reshape(-1, self.dim_y)
+        X_3d = []
+        y_3d = []
+        for i in range(X.shape[0] - self.seq_len + 1):
+            X_3d.append(X[i: i + self.seq_len, :])
+            y_3d.append(y[i + self.seq_len - 1:          i + self.seq_len, :])
+        X_3d = np.stack(X_3d, 1)
+        y_3d = np.stack(y_3d, 1)
+        y_3d = y_3d.astype(np.float32)  
+        dataset = Mydataset(torch.tensor(X_3d, dtype=torch.float32, device=self.device),
+                            torch.tensor(y_3d, dtype=torch.float32, device=self.device), '3D')
+        self.model.train()
+        for i in range(self.n_epoch):
+            self.loss_hist.append(0)
+            data_loader = DataLoader(dataset, batch_size=self.batch_size, shuffle = True)
+            for batch_X, batch_y in data_loader:
+                batch_X = batch_X.permute(0, 1, 2)
+                batch_y = batch_y.permute(0, 1, 2)
+                batch_y = batch_y.squeeze(1)
+                self.optimizer.zero_grad()
+                output, _, _ = self.model(batch_X)
+                loss = self.criterion(output, batch_y)
+                self.loss_hist[-1] += loss.item()
+                loss.backward()
+                self.optimizer.step()
+            print('Epoch:{}, Loss:{}'.format(i + 1, self.loss_hist[-1]))
+        print('Optimization finished')
+        return self
+    def predict(self, X):
+        X = torch.tensor(self.scaler_X.transform(X), dtype=torch.float32, device=self.device).unsqueeze(1)
+        self.model.eval()
+        with torch.no_grad():
+            y, _, _ = self.model(X)
+            y = y.cpu().numpy()
+        return y
+class AttentionLSTM(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers=1, dropout=0.5):
+        super(AttentionLSTM, self).__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout)
+        self.attn = nn.Linear(hidden_dim, 1)  # Attention权重
+        self.fc = nn.Linear(hidden_dim, output_dim)
+    def attention(self, lstm_output):
+        attn_weights = torch.tanh(self.attn(lstm_output))  
+        attn_weights = attn_weights.squeeze(-1)  
+        attn_weights = torch.softmax(attn_weights, dim=1) 
+        weighted_sum = torch.bmm(attn_weights.unsqueeze(1), lstm_output) 
+        return weighted_sum.squeeze(1) 
+    def forward(self, x):       
+        lstm_out, _ = self.lstm(x)  
+        attn_out = self.attention(lstm_out)   
+        output = self.fc(attn_out)
+        return output
+data = pd.read_csv()
+df = pd.DataFrame(data, columns=[])
+feats = [feat for feat in df.columns if feat not in []]
+print(data.shape[1])
+data = data.values
+TRAIN_SIZE = 
+x_temp = df[feats].to_numpy()
+y_temp = df[].to_numpy()
+x_new = np.zeros([,])
+x_new[:, :] = x_temp
+y_train = y_temp[:TRAIN_SIZE]
+y_test_init = y_temp[TRAIN_SIZE-1:-1]
+y_test = y_temp[TRAIN_SIZE:]
+x_new[:TRAIN_SIZE, ] = y_train
+x_new[TRAIN_SIZE:, ] = y_test_init
+train_X = x_new[:TRAIN_SIZE, :]
+train_y = y_train
+test_X = x_new[TRAIN_SIZE:, :]
+test_y = y_test
+mdl = SLSTMModel(dim_X=data.shape[], dim_y=, dim_H=, seq_len=, n_epoch=, batch_size=, lr=,dropout=,optimizer=,momentum=,device=torch.device(), seed=).fit(X=train_X, y=train_y)
+y_pred = mdl.predict(test_X)
+

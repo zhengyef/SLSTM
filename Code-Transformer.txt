@@ -1,0 +1,89 @@
+seed = 42
+np.random.seed(seed)
+torch.manual_seed(seed)
+random.seed(seed)
+data = pd.read_csv()
+df = pd.DataFrame(data, columns=[])
+feats = [feat for feat in df.columns if feat not in []]
+print(data.shape[1])
+data = data.values
+TRAIN_SIZE =
+x_temp = df[feats].to_numpy()
+y_temp = df[].to_numpy()
+x_new = np.zeros([])
+x_new[:, :] = x_temp
+y_train = y_temp[:TRAIN_SIZE]
+y_test_init = y_temp[TRAIN_SIZE-1:-1]
+y_test = y_temp[TRAIN_SIZE:]
+x_new[:TRAIN_SIZE, ] = y_train
+x_new[TRAIN_SIZE:, ] = y_test_init
+X_train = x_new[:TRAIN_SIZE, :]
+Y_train = y_train
+X_test = x_new[TRAIN_SIZE:, :]
+Y_test = y_test
+X_train_tensor = torch.tensor(X_train, dtype=torch.float32).unsqueeze()
+Y_train_tensor = torch.tensor(Y_train, dtype=torch.float32).unsqueeze()
+X_test_tensor = torch.tensor(X_test, dtype=torch.float32).unsqueeze()
+Y_test_tensor = torch.tensor(Y_test, dtype=torch.float32).unsqueeze()
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model) 
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)  
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)  
+        pe[:, 1::2] = torch.cos(position * div_term) 
+        pe = pe.unsqueeze(0) 
+        self.register_buffer('pe', pe)
+    def forward(self, x):
+        seq_len = x.size(1)
+        x = x + self.pe[:, :seq_len, :]
+        return x
+class TransformerModel(nn.Module):
+    def __init__(self, input_dim=1, d_model=64, nhead=4, num_layers=2, dim_feedforward=128, output_dim=1, dropout=0.1):
+        super(TransformerModel, self).__init__()
+        self.input_fc = nn.Linear(input_dim, d_model)
+        self.pos_encoder = PositionalEncoding(d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc_out = nn.Linear(d_model, output_dim)
+    def forward(self, x):       
+        x = self.input_fc(x)  
+        x = self.pos_encoder(x)  
+        x = x.transpose(0, 1)
+        transformer_output = self.transformer_encoder(x)
+        out = self.fc_out(transformer_output[-1])
+        return out
+def train_model(model, X_train, Y_train, X_test, Y_test, num_epochs=100, lr=0.001):
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    train_losses = []
+    test_losses = []
+    for epoch in range(1, num_epochs+1):
+        model.train()
+        optimizer.zero_grad()
+        output = model(X_train)
+        loss = criterion(output, Y_train)
+        loss.backward()
+        optimizer.step()
+        train_losses.append(loss.item())
+        model.eval()
+        with torch.no_grad():
+            test_output = model(X_test)
+            test_loss = criterion(test_output, Y_test)
+            test_losses.append(test_loss.item())
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch}/{num_epochs}, Train Loss: {loss.item():.4f}, Test Loss: {test_loss.item():.4f}")
+    return train_losses, test_losses
+device = torch.device("" if torch.cuda.is_available() else "")
+print("Using device:", device)
+transformer_model = TransformerModel().to(device)
+print("\nTraining Transformer Model:")
+trans_train_losses, trans_test_losses = train_model(transformer_model, X_train_tensor_device, Y_train_tensor_device,
+  X_test_tensor_device, Y_test_tensor_device,num_epochs=, lr=)
+transformer_model.eval()
+with torch.no_grad():    
+    trans_pred_test = transformer_model(X_test_tensor_device).cpu().numpy().flatten()
+    Y_test_np = Y_test_tensor.cpu().numpy().flatten()
+    trans_pred_train= transformer_model(X_train_tensor_device).cpu().numpy().flatten()
+    Y_train_np = Y_train_tensor.cpu().numpy().flatten()
